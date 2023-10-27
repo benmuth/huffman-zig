@@ -17,10 +17,6 @@ const sample_string =
 pub fn main() !void {
     const arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer arena.deinit();
-    // // std.hash.Fnv1a_64
-    // const allocator = arena.allocator();
-    // const context = struct { std.math..}
-    // var counts = std.HashMap(u8, u32,, ).init(allocator)
 
     var utf8_iterator = (try std.unicode.Utf8View.init(sample_string)).iterator();
     while (utf8_iterator.nextCodepoint()) |code_point| {
@@ -40,33 +36,40 @@ pub fn main() !void {
     // try bw.flush(); // don't forget to flush!
 }
 
-const char_table = struct {
+// ----------------------------------------
+// Counting chars
+// ----------------------------------------
+
+/// a char_table is used to count the number of UTF-8 characters in a string
+pub const char_table = struct {
     len: u32,
     table: []entry,
+    hash_fn: *const fn (char: u21) u32,
 
-    hash_fn: hash_function,
-
-    fn init(allocator: std.mem.Allocator, hash_fn: hash_function, initial_cap: u32) !char_table {
+    /// hash_fn can be any function that hashes Unicode code points to u32. The char_table
+    /// capacity is determined by initial_cap and currently doesn't grow. TODO: make it grow
+    pub fn init(allocator: std.mem.Allocator, hash_fn: *const fn (char: u21) u32, initial_cap: u32) !char_table {
         var table = try allocator.alloc(entry, initial_cap);
-        // for (table) |e| {
-        //     e.char = 0x00;
-        //     e.count = std.math.maxInt(u32);
-        // }
         for (0..table.len) |i| {
+            // these values for char and count represent an uninitialized entry
             table[i] = entry{ .char = 0x00, .count = std.math.maxInt(u32) };
         }
 
         return char_table{ .len = initial_cap, .table = table, .hash_fn = hash_fn };
     }
 
-    fn add(Self: @This(), char: u21) !void {
+    /// add one to the count of char in the table
+    pub fn add(Self: @This(), char: u21) !void {
         const idx = try Self.lookup(char);
+        // initialize if needed
         if (Self.table[idx].char == 0x00 and Self.table[idx].count == std.math.maxInt(u32)) {
             Self.table[idx] = entry{ .char = char, .count = 0 };
         }
         Self.table[idx].count += 1;
     }
 
+    /// returns the index where the char is located in the backing array. If the char hasn't
+    /// been added yet, returns the index of an uninitialized entry.
     fn lookup(Self: @This(), char: u21) !usize {
         const hash = Self.hash_fn(char);
         var candidate_idx = @rem(hash, Self.len);
@@ -75,6 +78,7 @@ const char_table = struct {
             candidate_idx += 1;
             // TODO: use a better heuristic here, like if array is 80% full or something
             if (candidate_idx >= Self.len) {
+                // TODO: grow the array instead of returning error
                 return CharTableError.OutOfSpace;
             }
             candidate = Self.table[candidate_idx];
@@ -96,9 +100,9 @@ test "basic hash table ops" {
     for (ct.table) |e| {
         if (e.count != std.math.maxInt(u32)) {
             total_codepoint_count += e.count;
-            var s: [4]u8 = undefined;
-            _ = try std.unicode.utf8Encode(e.char, &s);
-            print("char: {s} \t count: {d}\n", .{ s, e.count });
+            // var s: [4]u8 = undefined;
+            // _ = try std.unicode.utf8Encode(e.char, &s);
+            // print("char: {s} \t count: {d}\n", .{ s, e.count });
         }
     }
     const expected_count = try std.unicode.utf8CountCodepoints(sample_string);
@@ -111,8 +115,7 @@ const entry = struct {
     count: u32,
 };
 
-const hash_function = *const fn (char: u21) u32;
-
+/// taken from https://nullprogram.com/blog/2018/07/31/
 fn prospectorHash(c: u21) u32 {
     var x = @as(u32, c);
     x ^= x >> 16;
@@ -121,4 +124,66 @@ fn prospectorHash(c: u21) u32 {
     x *%= @as(u32, 0x45d9f3b);
     x ^= x >> 16;
     return x;
+}
+
+// ----------------------------------------
+// Sorting
+// ----------------------------------------
+
+fn quickSort(char_counts: []entry) void {
+    if (char_counts.len < 2) {
+        return; // sorted
+    }
+
+    partition(char_counts);
+
+    const pivot_idx = char_counts[char_counts.len - 1];
+    quickSort(char_counts[0..pivot_idx]);
+    quickSort(char_counts[pivot_idx + 1 .. char_counts.len]);
+}
+
+fn partition(a: []entry) void {
+    var j: u32 = 0;
+    var q: u32 = 0;
+    var r = a.len - 1;
+    while (j < r) {
+        if (a[j].count > a[r].count) {
+            j += 1;
+            continue;
+        }
+        const tmp = a[j];
+        a[j] = a[q];
+        a[q] = tmp;
+        q += 1;
+    }
+    const tmp = a[r];
+    a[r] = a[q];
+    a[q] = tmp;
+}
+
+test "quicksort" {
+    // var entries = []entry{
+    //     entry{ .char = 'n', .count = 3 },
+    //     entry{ .char = 'e', .count = 2 },
+    //     entry{ .char = 'b', .count = 1 },
+    // };
+
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    defer arena.deinit();
+    var allocator = arena.allocator();
+    var entries = try allocator.alloc(entry, 3);
+
+    entries[0] = entry{ .char = 'n', .count = 3 };
+    entries[1] = entry{ .char = 'e', .count = 2 };
+    entries[2] = entry{ .char = 'b', .count = 1 };
+
+    partition(entries);
+
+    for (entries) |e| {
+        var s: [4]u8 = undefined;
+        _ = try std.unicode.utf8Encode(e.char, &s);
+        // print("char: {s} \t count: {d}\n", .{ s, e.count });
+        print("char: {s} \t ", .{s});
+    }
+    print("\n", .{});
 }
