@@ -36,6 +36,42 @@ pub fn main() !void {
     // try bw.flush(); // don't forget to flush!
 }
 
+const node = struct {
+    left: *node,
+    right: *node,
+    char: u21,
+    count: u32,
+};
+
+fn createTree(allocator: std.mem.Allocator, ct: char_table) ?*node {
+    if (ct.table.len == 0) {
+        return null;
+    }
+    if (ct.table.len == 1) {
+        return allocator.create(node); // TODO: make this return a useful pointer to a node
+    }
+
+    std.assert(std.sort.isSorted(char_table_entry, ct.table, {}, std.sort.asc(char_table_entry)));
+
+    // TODO: allocate all nodes at once and create tree in one pass
+    var tree_buf = allocator.alloc(*node, (2 * ct.distinct_char_count - 1)); // can be usize instead of *node?
+    for (ct.table, 0..) |e, i| {
+        if (e.isInitialized()) {
+            const new_node = allocator.create(node);
+            new_node.* = node{ .left = null, .right = null, .char = e.char, .count = e.count };
+            tree_buf[i] = new_node;
+        }
+    }
+
+    std.assert(@TypeOf(tree_buf[ct.distinct_char_count + 1]) == undefined); //
+    std.assert(@TypeOf(tree_buf[ct.distinct_char_count]) == *node); //
+
+    var i = ct.distinct_char_count;
+    _ = i;
+    var j = 0;
+    while (j < ct.distinct_char_count) {}
+}
+
 // ----------------------------------------
 // Counting chars
 // ----------------------------------------
@@ -43,27 +79,38 @@ pub fn main() !void {
 /// a char_table is used to count the number of UTF-8 characters in a string
 pub const char_table = struct {
     len: u32,
-    table: []entry,
+    distinct_char_count: u32,
+    table: []char_table_entry,
     hash_fn: *const fn (char: u21) u32,
 
     /// hash_fn can be any function that hashes Unicode code points to u32. The char_table
     /// capacity is determined by initial_cap and currently doesn't grow. TODO: make it grow
     pub fn init(allocator: std.mem.Allocator, hash_fn: *const fn (char: u21) u32, initial_cap: u32) !char_table {
-        var table = try allocator.alloc(entry, initial_cap);
+        var table = try allocator.alloc(char_table_entry, initial_cap);
         for (0..table.len) |i| {
             // these values for char and count represent an uninitialized entry
-            table[i] = entry{ .char = 0x00, .count = std.math.maxInt(u32) };
+            table[i] = char_table_entry{ .char = 0x00, .count = std.math.maxInt(u32) };
         }
 
-        return char_table{ .len = initial_cap, .table = table, .hash_fn = hash_fn };
+        return char_table{
+            .len = initial_cap,
+            .distinct_char_count = 0,
+            .table = table,
+            .hash_fn = hash_fn,
+        };
+    }
+
+    pub fn deinit(Self: @This(), allocator: std.mem.Allocator) void {
+        allocator.free(Self.table);
     }
 
     /// add one to the count of char in the table
-    pub fn add(Self: @This(), char: u21) !void {
+    pub fn add(Self: *@This(), char: u21) !void {
         const idx = try Self.lookup(char);
         // initialize if needed
         if (Self.table[idx].char == 0x00 and Self.table[idx].count == std.math.maxInt(u32)) {
-            Self.table[idx] = entry{ .char = char, .count = 0 };
+            Self.table[idx] = char_table_entry{ .char = char, .count = 0 };
+            Self.distinct_char_count += 1;
         }
         Self.table[idx].count += 1;
     }
@@ -88,10 +135,11 @@ pub const char_table = struct {
 };
 
 test "basic hash table ops" {
-    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
-    defer arena.deinit();
-    var allocator = arena.allocator();
-    var ct = try char_table.init(allocator, prospectorHash, 4096);
+    // var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    // defer arena.deinit();
+    // var allocator = arena.allocator();
+    var ct = try char_table.init(std.testing.allocator, prospectorHash, 4096);
+    defer ct.deinit(std.testing.allocator);
     var utf8_iterator = (try std.unicode.Utf8View.init(sample_string)).iterator();
     while (utf8_iterator.nextCodepoint()) |code_point| {
         try ct.add(code_point);
@@ -110,9 +158,14 @@ test "basic hash table ops" {
     print("expected: {d}, actual: {d}\n", .{ expected_count, total_codepoint_count });
 }
 
-const entry = struct {
+// can I embed this in the char table?
+const char_table_entry = struct {
     char: u21,
     count: u32,
+
+    fn isInitialized(Self: @This()) bool {
+        return Self.char != 0x00 and Self.count != std.math.maxInt(u32);
+    }
 };
 
 /// taken from https://nullprogram.com/blog/2018/07/31/
@@ -130,9 +183,9 @@ fn prospectorHash(c: u21) u32 {
 // Sorting
 // ----------------------------------------
 
-fn quickSort(char_counts: []entry) void {
+fn quickSort(char_counts: []char_table_entry) void {
     if (char_counts.len < 2) {
-        return; // sorted
+        return; // already sorted
     }
 
     partition(char_counts);
@@ -142,7 +195,7 @@ fn quickSort(char_counts: []entry) void {
     quickSort(char_counts[pivot_idx + 1 .. char_counts.len]);
 }
 
-fn partition(a: []entry) void {
+fn partition(a: []char_table_entry) void {
     var j: u32 = 0;
     var q: u32 = 0;
     var r = a.len - 1;
@@ -162,20 +215,16 @@ fn partition(a: []entry) void {
 }
 
 test "quicksort" {
-    // var entries = []entry{
-    //     entry{ .char = 'n', .count = 3 },
-    //     entry{ .char = 'e', .count = 2 },
-    //     entry{ .char = 'b', .count = 1 },
-    // };
+    // var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    // defer arena.deinit();
+    // var allocator = arena.allocator();
+    var allocator = std.testing.allocator;
+    var entries = try allocator.alloc(char_table_entry, 3);
+    defer allocator.free(entries);
 
-    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
-    defer arena.deinit();
-    var allocator = arena.allocator();
-    var entries = try allocator.alloc(entry, 3);
-
-    entries[0] = entry{ .char = 'n', .count = 3 };
-    entries[1] = entry{ .char = 'e', .count = 2 };
-    entries[2] = entry{ .char = 'b', .count = 1 };
+    entries[0] = char_table_entry{ .char = 'n', .count = 3 };
+    entries[1] = char_table_entry{ .char = 'e', .count = 2 };
+    entries[2] = char_table_entry{ .char = 'b', .count = 1 };
 
     partition(entries);
 
@@ -187,3 +236,9 @@ test "quicksort" {
     }
     print("\n", .{});
 }
+
+// ----------------------------------------
+// Priority Queue
+// ----------------------------------------
+
+// TODO: implement binary heap
