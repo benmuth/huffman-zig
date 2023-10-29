@@ -188,51 +188,88 @@ fn quickSort(char_counts: []char_table_entry) void {
         return; // already sorted
     }
 
-    partition(char_counts);
+    const pivot_idx = partition(char_counts);
 
-    const pivot_idx = char_counts[char_counts.len - 1];
+    // const pivot_idx = char_counts[char_counts.len - 1];
     quickSort(char_counts[0..pivot_idx]);
     quickSort(char_counts[pivot_idx + 1 .. char_counts.len]);
 }
 
-fn partition(a: []char_table_entry) void {
+fn partition(a: []char_table_entry) u32 {
+    // invariants to maintain through iteration:
+    // group 'P': just the pivot element, element at [r == a.len-1]
+    // group 'L': elements known to be less than pivot, elements from [0,q)
+    // group 'G': elements known to be greater than pivot, elements from [q, j)
+    // group 'U': unseen elements, elements from [j, r)
+
+    // as iteration progresses group 'G' and 'L' grow, group 'U' shrinks
+
+    // j is our iteration variable
     var j: u32 = 0;
+    // the pivot element will eventually be moved to index q
+    // during iteration, q points to the leftmost element in group 'G'
     var q: u32 = 0;
+    // r points to the pivot, it stays in place during iteration (group 'P')
     var r = a.len - 1;
+
+    // print("pivot index at: {d}\n", .{r});
+    // print("pivot element : {}\n", .{a[r]});
     while (j < r) {
         if (a[j].count > a[r].count) {
+            // the element is in the right spot (to the right of the eventual
+            // pivot, in group 'G'), so look at the next element
             j += 1;
             continue;
         }
+        // a[j] <= pivot element, so it should be in group 'L', to the left of
+        // q (q is where the pivot element will eventually be)
+        // swap a[j] with q (the divider between 'L' and 'G' and
+        // increment q so that once again all elements to the left of q
+        // are less than the pivot
         const tmp = a[j];
         a[j] = a[q];
         a[q] = tmp;
         q += 1;
+        j += 1;
     }
+    // after iteration, everything is in place besides p and r, so swap them
     const tmp = a[r];
     a[r] = a[q];
     a[q] = tmp;
+    return q;
 }
 
 test "quicksort" {
     // var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     // defer arena.deinit();
     // var allocator = arena.allocator();
+    const rand_seed: u64 = @as(u64, @intCast(std.time.timestamp()));
+    var prng = std.rand.DefaultPrng.init(rand_seed);
+    const random = prng.random();
+    const test_table_size = random.uintLessThan(u8, 20);
     var allocator = std.testing.allocator;
-    var entries = try allocator.alloc(char_table_entry, 3);
+    var entries = try allocator.alloc(char_table_entry, test_table_size);
     defer allocator.free(entries);
 
-    entries[0] = char_table_entry{ .char = 'n', .count = 3 };
-    entries[1] = char_table_entry{ .char = 'e', .count = 2 };
-    entries[2] = char_table_entry{ .char = 'b', .count = 1 };
+    for (entries) |*e| {
+        e.count = @as(u32, random.uintLessThan(u10, 1000));
+        e.char = random.uintLessThan(u21, 4096);
+    }
 
-    partition(entries);
+    // entries[0] = char_table_entry{ .char = 'n', .count = 3 };
+    // entries[1] = char_table_entry{ .char = 'e', .count = 2 };
+    // entries[2] = char_table_entry{ .char = 'b', .count = 1 };
 
+    quickSort(entries);
+
+    var prev_count: u32 = 0;
     for (entries) |e| {
         var s: [4]u8 = undefined;
         _ = try std.unicode.utf8Encode(e.char, &s);
+        try std.testing.expect(e.count >= prev_count);
+        prev_count = e.count;
         // print("char: {s} \t count: {d}\n", .{ s, e.count });
-        print("char: {s} \t ", .{s});
+        // print("char: {s} \t count: {d}\t", .{ s, e.count });
     }
     print("\n", .{});
 }
@@ -241,4 +278,105 @@ test "quicksort" {
 // Priority Queue
 // ----------------------------------------
 
-// TODO: implement binary heap
+/// MinHeap
+const MinHeap = struct {
+    array: std.ArrayList(char_table_entry),
+    allocator: std.mem.Allocator,
+
+    pub fn init(allocator: std.mem.Allocator) MinHeap {
+        const array = std.ArrayList(char_table_entry).init(allocator);
+        return MinHeap{ .array = array, .allocator = allocator };
+    }
+
+    pub fn insert(Self: *MinHeap, e: char_table_entry) !void {
+        try Self.array.append(e);
+        Self.minHeapifyUp(Self.array.items.len - 1);
+    }
+
+    fn minHeapifyUp(Self: *MinHeap, idx: u64) void {
+        var curr_idx = idx;
+        while (Self.array.items[parent(curr_idx)].count > Self.array.items[curr_idx].count) {
+            Self.swap(parent(curr_idx), curr_idx);
+            curr_idx = parent(curr_idx);
+        }
+    }
+
+    fn minHeapifyDown(Self: *MinHeap, idx: u64) void {
+        const last = Self.array.items.len - 1;
+        var l = left(idx);
+        var r = right(idx);
+        var childToCompare: u64 = 0;
+
+        while (l < last) {
+            if (l == last or Self.array.items[l].count < Self.array.items[r].count) {
+                childToCompare = l;
+            } else {
+                childToCompare = r;
+            }
+
+            var i = idx;
+            if (Self.array.items[i].count > Self.array.items[childToCompare].count) {
+                Self.swap(i, childToCompare);
+                i = childToCompare;
+                l = left(i);
+                r = right(i);
+            } else {
+                return;
+            }
+        }
+    }
+
+    pub fn extract(Self: *MinHeap) char_table_entry {
+        const last = Self.array.getLastOrNull();
+        const res = Self.array.items[0];
+        Self.array.items[0] = last orelse return char_table_entry{ .char = 0x00, .count = std.math.maxInt(u32) };
+
+        Self.minHeapifyDown(0);
+
+        Self.array.shrinkRetainingCapacity(Self.array.items.len - 1);
+        return res;
+    }
+
+    fn deinit(Self: MinHeap) void {
+        Self.array.deinit();
+    }
+
+    fn swap(Self: *MinHeap, idx1: u64, idx2: u64) void {
+        const tmp = Self.array.items[idx1];
+        Self.array.items[idx1] = Self.array.items[idx2];
+        Self.array.items[idx2] = tmp;
+    }
+};
+
+test "min heap" {
+    var heap: MinHeap = MinHeap.init(std.testing.allocator);
+    defer heap.deinit();
+    var heap_ptr = &heap;
+
+    try heap_ptr.insert(char_table_entry{ .char = 'a', .count = 10 });
+    try heap_ptr.insert(char_table_entry{ .char = 'b', .count = 5 });
+    try heap_ptr.insert(char_table_entry{ .char = 'c', .count = 7 });
+    try heap_ptr.insert(char_table_entry{ .char = 'd', .count = 12 });
+    try std.testing.expectEqual(@as(u32, 5), heap.array.items[0].count);
+    print("heap: {any}\n", .{heap.array.items});
+
+    var min = heap_ptr.extract();
+    print("min: {any}\n", .{min});
+    try std.testing.expectEqual(@as(u32, 5), min.count);
+    try std.testing.expectEqual(@as(u32, 7), heap.array.items[0].count);
+    print("heap: {any}\n", .{heap.array.items});
+}
+
+// helper functions for heap
+fn parent(idx: u64) u64 {
+    if (idx == 0) return idx;
+    return (idx - 1) / 2;
+}
+
+fn left(idx: u64) u64 {
+    return 2 * idx + 1;
+}
+
+fn right(idx: u64) u64 {
+    return 2 * idx + 2;
+}
