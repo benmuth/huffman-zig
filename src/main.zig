@@ -15,16 +15,25 @@ const sample_string =
 ;
 
 pub fn main() !void {
-    const arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer arena.deinit();
 
-    var utf8_iterator = (try std.unicode.Utf8View.init(sample_string)).iterator();
-    while (utf8_iterator.nextCodepoint()) |code_point| {
-        _ = code_point;
-        // print("type: {}\n", .{@TypeOf(code_point)});
-        // print("0x{x} is {u} \n", .{ code_point, code_point });
-        // TODO: add to hash table here
-    }
+    // var utf8_iterator = (try std.unicode.Utf8View.init(sample_string)).iterator();
+    // while (utf8_iterator.nextCodepoint()) |code_point| {
+    //     _ = code_point;
+    //     // print("type: {}\n", .{@TypeOf(code_point)});
+    //     // print("0x{x} is {u} \n", .{ code_point, code_point });
+    //     // TODO: add to hash table here
+    // }
+    var ct = try char_table.init(arena.allocator(), prospectorHash, 4096);
+    defer ct.deinit(arena.allocator());
+
+    try ct.add('a');
+    try ct.add('b');
+    try ct.add('c');
+
+    const head = try createTree(arena.allocator(), ct);
+    print("head count: {}\n", .{head.count});
 
     // stdout is for the actual output of your application, for example if you
     // are implementing gzip, then only the compressed bytes should be sent to
@@ -36,40 +45,92 @@ pub fn main() !void {
     // try bw.flush(); // don't forget to flush!
 }
 
-const node = struct {
-    left: *node,
-    right: *node,
-    char: u21,
+const Node = struct {
+    left: ?*Node,
+    right: ?*Node,
+    char: u21, // char represents a Unicode codepoint
     count: u32,
 };
 
-fn createTree(allocator: std.mem.Allocator, ct: char_table) ?*node {
-    if (ct.table.len == 0) {
-        return null;
+const TreeError = error{
+    EmptyTable,
+};
+
+fn createTree(allocator: std.mem.Allocator, ct: char_table) !*Node {
+    if (ct.distinct_char_count == 0) { // no chars in char table
+        return TreeError.EmptyTable;
     }
-    if (ct.table.len == 1) {
-        return allocator.create(node); // TODO: make this return a useful pointer to a node
+    if (ct.distinct_char_count == 1) {
+        return allocator.create(Node); // TODO: make this return a useful pointer to a node
     }
 
-    std.assert(std.sort.isSorted(char_table_entry, ct.table, {}, std.sort.asc(char_table_entry)));
+    // std.assert(std.sort.isSorted(char_table_entry, ct.table, {}, std.sort.asc(char_table_entry)));
 
     // TODO: allocate all nodes at once and create tree in one pass
-    var tree_buf = allocator.alloc(*node, (2 * ct.distinct_char_count - 1)); // can be usize instead of *node?
-    for (ct.table, 0..) |e, i| {
+    // var tree_buf = allocator.alloc(*node, (2 * ct.distinct_char_count - 1)); // can be usize instead of *node?
+
+    var target_cap = ct.distinct_char_count;
+    var heap: MinHeap = try MinHeap.init(allocator, target_cap);
+    // defer heap.deinit();
+    print("heap array len: {}\n", .{heap.array.items.len});
+    print("heap cap: {}\n", .{heap.array.capacity});
+
+    var heap_ptr = &heap;
+    for (ct.table) |e| {
         if (e.isInitialized()) {
-            const new_node = allocator.create(node);
-            new_node.* = node{ .left = null, .right = null, .char = e.char, .count = e.count };
-            tree_buf[i] = new_node;
+            var new_node = Node{
+                .left = null,
+                .right = null,
+                .char = e.char,
+                .count = e.count,
+            };
+            print("cap: {}\n", .{heap.array.capacity});
+            print("heap: {}\n", .{heap});
+            heap_ptr.insert(&new_node);
         }
     }
 
-    std.assert(@TypeOf(tree_buf[ct.distinct_char_count + 1]) == undefined); //
-    std.assert(@TypeOf(tree_buf[ct.distinct_char_count]) == *node); //
+    var head = try allocator.create(Node);
+    // print("heap array: {}\n", .{heap.array});
+    while (heap.array.items.len > 1) {
+        const left_child = heap_ptr.extract() catch unreachable;
+        const right_child = heap_ptr.extract() catch unreachable;
 
-    var i = ct.distinct_char_count;
-    _ = i;
-    var j = 0;
-    while (j < ct.distinct_char_count) {}
+        const sum_counts: u32 = left_child.count + right_child.count;
+
+        const new_node = try allocator.create(Node);
+
+        new_node.* = Node{ .left = left_child, .right = right_child, .char = 0x00, .count = sum_counts };
+        head = new_node;
+        heap_ptr.insert(new_node);
+    }
+
+    return head;
+}
+
+// fn freeTree(allocator: std.mem.Allocator, head: ?*Node) void {
+//     var not_null_head = head orelse return;
+
+//     print("head stuff: {}\n", .{not_null_head});
+//     freeTree(allocator, not_null_head.left);
+//     freeTree(allocator, not_null_head.right);
+//     allocator.destroy(not_null_head);
+// }
+
+test "create tree" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var ct = try char_table.init(arena.allocator(), prospectorHash, 4096);
+    // defer ct.deinit(std.testing.allocator);
+
+    try ct.add('a');
+    try ct.add('b');
+    try ct.add('c');
+
+    const head = try createTree(arena.allocator(), ct);
+    // defer freeTree(std.testing.allocator, head);
+
+    print("head count: {}\n", .{head.count});
 }
 
 // ----------------------------------------
@@ -78,7 +139,7 @@ fn createTree(allocator: std.mem.Allocator, ct: char_table) ?*node {
 
 /// a char_table is used to count the number of UTF-8 characters in a string
 pub const char_table = struct {
-    len: u32,
+    cap: u32,
     distinct_char_count: u32,
     table: []char_table_entry,
     hash_fn: *const fn (char: u21) u32,
@@ -86,6 +147,7 @@ pub const char_table = struct {
     /// hash_fn can be any function that hashes Unicode code points to u32. The char_table
     /// capacity is determined by initial_cap and currently doesn't grow. TODO: make it grow
     pub fn init(allocator: std.mem.Allocator, hash_fn: *const fn (char: u21) u32, initial_cap: u32) !char_table {
+        // NOTE: use a std.ArrayList here (like the min heap implementation)
         var table = try allocator.alloc(char_table_entry, initial_cap);
         for (0..table.len) |i| {
             // these values for char and count represent an uninitialized entry
@@ -93,7 +155,7 @@ pub const char_table = struct {
         }
 
         return char_table{
-            .len = initial_cap,
+            .cap = initial_cap,
             .distinct_char_count = 0,
             .table = table,
             .hash_fn = hash_fn,
@@ -119,12 +181,12 @@ pub const char_table = struct {
     /// been added yet, returns the index of an uninitialized entry.
     fn lookup(Self: @This(), char: u21) !usize {
         const hash = Self.hash_fn(char);
-        var candidate_idx = @rem(hash, Self.len);
+        var candidate_idx = @rem(hash, Self.cap);
         var candidate = Self.table[candidate_idx];
         while (candidate.count != std.math.maxInt(u32) and candidate.char != char) {
             candidate_idx += 1;
             // TODO: use a better heuristic here, like if array is 80% full or something
-            if (candidate_idx >= Self.len) {
+            if (candidate_idx >= Self.cap) {
                 // TODO: grow the array instead of returning error
                 return CharTableError.OutOfSpace;
             }
@@ -138,8 +200,9 @@ test "basic hash table ops" {
     // var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     // defer arena.deinit();
     // var allocator = arena.allocator();
-    var ct = try char_table.init(std.testing.allocator, prospectorHash, 4096);
-    defer ct.deinit(std.testing.allocator);
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var ct = try char_table.init(arena.allocator(), prospectorHash, 4096);
     var utf8_iterator = (try std.unicode.Utf8View.init(sample_string)).iterator();
     while (utf8_iterator.nextCodepoint()) |code_point| {
         try ct.add(code_point);
@@ -240,16 +303,16 @@ fn partition(a: []char_table_entry) u32 {
 }
 
 test "quicksort" {
-    // var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
-    // defer arena.deinit();
-    // var allocator = arena.allocator();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var allocator = arena.allocator();
+
     const rand_seed: u64 = @as(u64, @intCast(std.time.timestamp()));
     var prng = std.rand.DefaultPrng.init(rand_seed);
     const random = prng.random();
     const test_table_size = random.uintLessThan(u8, 20);
-    var allocator = std.testing.allocator;
     var entries = try allocator.alloc(char_table_entry, test_table_size);
-    defer allocator.free(entries);
+    // defer allocator.free(entries);
 
     for (entries) |*e| {
         e.count = @as(u32, random.uintLessThan(u10, 1000));
@@ -278,45 +341,62 @@ test "quicksort" {
 // Priority Queue
 // ----------------------------------------
 
+const HeapError = error{
+    EmptyHeap,
+};
+
 /// MinHeap
 const MinHeap = struct {
-    array: std.ArrayList(char_table_entry),
+    // TODO: make this generic (for all types with a `count` field)
+    // array: std.ArrayList(char_table_entry),
+    array: std.ArrayList(*Node),
     allocator: std.mem.Allocator,
 
-    pub fn init(allocator: std.mem.Allocator) MinHeap {
-        const array = std.ArrayList(char_table_entry).init(allocator);
-        return MinHeap{ .array = array, .allocator = allocator };
+    pub fn init(allocator: std.mem.Allocator, initial_cap: u32) !MinHeap {
+        var array = try std.ArrayList(*Node).initCapacity(allocator, initial_cap);
+        print("init array len: {}\n", .{array.items.len});
+        print("init array cap: {}\n", .{array.capacity});
+        print("array items: {any}\n", .{array.items});
+        var ret = MinHeap{ .array = array, .allocator = allocator };
+        // print("heap array: {}\n", .{ret});
+        return ret;
     }
 
-    pub fn insert(Self: *MinHeap, e: char_table_entry) !void {
-        try Self.array.append(e);
-        Self.minHeapifyUp(Self.array.items.len - 1);
+    pub fn insert(self: *MinHeap, n: *Node) void {
+        print("heap array len (insert before append): {}\n", .{self.array.items.len});
+        print("heap array cap (insert before append): {}\n", .{self.array.capacity});
+        // print("heap inside insert: {}\n", .{self});
+        self.array.appendAssumeCapacity(n);
+
+        // print("heap array len (insert after append): {}\n", .{self.array.items.len});
+        self.minHeapifyUp(self.array.items.len - 1);
     }
 
-    fn minHeapifyUp(Self: *MinHeap, idx: u64) void {
+    fn minHeapifyUp(self: *MinHeap, idx: u64) void {
         var curr_idx = idx;
-        while (Self.array.items[parent(curr_idx)].count > Self.array.items[curr_idx].count) {
-            Self.swap(parent(curr_idx), curr_idx);
+        print("current idx: {} \t parent idx: {} \t array items length: {}\n", .{ curr_idx, parent(curr_idx), self.array.items.len });
+        while (self.array.items[parent(curr_idx)].count > self.array.items[curr_idx].count) {
+            self.swap(parent(curr_idx), curr_idx);
             curr_idx = parent(curr_idx);
         }
     }
 
-    fn minHeapifyDown(Self: *MinHeap, idx: u64) void {
-        const last = Self.array.items.len - 1;
+    fn minHeapifyDown(self: *MinHeap, idx: u64) void {
+        const last = self.array.items.len - 1;
         var l = left(idx);
         var r = right(idx);
         var childToCompare: u64 = 0;
 
         while (l < last) {
-            if (l == last or Self.array.items[l].count < Self.array.items[r].count) {
+            if (l == last or self.array.items[l].count < self.array.items[r].count) {
                 childToCompare = l;
             } else {
                 childToCompare = r;
             }
 
             var i = idx;
-            if (Self.array.items[i].count > Self.array.items[childToCompare].count) {
-                Self.swap(i, childToCompare);
+            if (self.array.items[i].count > self.array.items[childToCompare].count) {
+                self.swap(i, childToCompare);
                 i = childToCompare;
                 l = left(i);
                 r = right(i);
@@ -326,41 +406,53 @@ const MinHeap = struct {
         }
     }
 
-    pub fn extract(Self: *MinHeap) char_table_entry {
-        const last = Self.array.getLastOrNull();
-        const res = Self.array.items[0];
-        Self.array.items[0] = last orelse return char_table_entry{ .char = 0x00, .count = std.math.maxInt(u32) };
+    pub fn extract(self: *MinHeap) !*Node {
+        const last = self.array.getLastOrNull();
+        var res = self.array.items[0];
+        self.array.items[0] = last orelse return HeapError.EmptyHeap;
 
-        Self.minHeapifyDown(0);
+        self.minHeapifyDown(0);
 
-        Self.array.shrinkRetainingCapacity(Self.array.items.len - 1);
+        self.array.shrinkRetainingCapacity(self.array.items.len - 1);
         return res;
     }
 
-    fn deinit(Self: MinHeap) void {
-        Self.array.deinit();
+    fn deinit(self: MinHeap) void {
+        self.array.deinit();
     }
 
-    fn swap(Self: *MinHeap, idx1: u64, idx2: u64) void {
-        const tmp = Self.array.items[idx1];
-        Self.array.items[idx1] = Self.array.items[idx2];
-        Self.array.items[idx2] = tmp;
+    fn swap(self: *MinHeap, idx1: u64, idx2: u64) void {
+        const tmp = self.array.items[idx1];
+        self.array.items[idx1] = self.array.items[idx2];
+        self.array.items[idx2] = tmp;
     }
 };
 
 test "min heap" {
-    var heap: MinHeap = MinHeap.init(std.testing.allocator);
-    defer heap.deinit();
-    var heap_ptr = &heap;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var allocator = arena.allocator();
 
-    try heap_ptr.insert(char_table_entry{ .char = 'a', .count = 10 });
-    try heap_ptr.insert(char_table_entry{ .char = 'b', .count = 5 });
-    try heap_ptr.insert(char_table_entry{ .char = 'c', .count = 7 });
-    try heap_ptr.insert(char_table_entry{ .char = 'd', .count = 12 });
+    var heap: MinHeap = try MinHeap.init(allocator, 4);
+    // defer heap.deinit();
+    var test_node_1 = Node{ .char = 'a', .count = 10, .left = null, .right = null };
+    var test_node_2 = Node{ .char = 'b', .count = 5, .left = null, .right = null };
+    var test_node_3 = Node{ .char = 'c', .count = 7, .left = null, .right = null };
+    var test_node_4 = Node{ .char = 'd', .count = 12, .left = null, .right = null };
+    var test_node_1_ptr = &test_node_1;
+    var test_node_2_ptr = &test_node_2;
+    var test_node_3_ptr = &test_node_3;
+    var test_node_4_ptr = &test_node_4;
+    var heap_ptr: *MinHeap = &heap;
+    heap_ptr.insert(test_node_1_ptr);
+    heap_ptr.insert(test_node_2_ptr);
+    heap_ptr.insert(test_node_3_ptr);
+    heap_ptr.insert(test_node_4_ptr);
     try std.testing.expectEqual(@as(u32, 5), heap.array.items[0].count);
+    // try std.testing.expectEqual(@as(u32, 10), heap.array.items[0].count);
     print("heap: {any}\n", .{heap.array.items});
 
-    var min = heap_ptr.extract();
+    var min = try heap.extract();
     print("min: {any}\n", .{min});
     try std.testing.expectEqual(@as(u32, 5), min.count);
     try std.testing.expectEqual(@as(u32, 7), heap.array.items[0].count);
