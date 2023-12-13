@@ -3,17 +3,6 @@ const print = std.debug.print;
 
 const CharTableError = error{OutOfSpace};
 
-const sample_string =
-    \\ We'll assume that each character has an associated weight equal to the number of times the character occurs in a file, for example. In the "go go gophers" example, the characters 'g' and 'o' have weight 3, the space has weight 2, and the other characters have weight 1. When compressing a file we'll need to calculate these weights, we'll ignore this step for now and assume that all character weights have been calculated. Huffman's algorithm assumes that we're building a single tree from a group (or forest) of trees. Initially, all the trees have a single node with a character and the character's weight. Trees are combined by picking two trees, and making a new tree from the two trees. This decreases the number of trees by one at each step since two trees are combined into one tree. The algorithm is as follows:
-    \\ 
-    \\ Begin with a forest of trees. All trees are one node, with the weight of the tree equal to the weight of the character in the node. Characters that occur most frequently have the highest weights. Characters that occur least frequently have the smallest weights.
-    \\ Repeat this step until there is only one tree:
-    \\ 
-    \\ Choose two trees with the smallest weights, call these trees T1 and T2. Create a new tree whose root has a weight equal to the sum of the weights T1 + T2 and whose left subtree is T1 and whose right subtree is T2.
-    \\ The single tree left after the previous step is an optimal encoding tree.
-    \\ We'll use the string "go go gophers" as an example. Initially we have the forest shown below. The nodes are shown with a weight/count that represents the number of times the node's character occurs.
-;
-
 pub fn main() !void {
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer arena.deinit();
@@ -27,23 +16,22 @@ pub fn main() !void {
     // }
     var ct = try char_table.init(arena.allocator(), prospectorHash, 4096);
     defer ct.deinit(arena.allocator());
-
     try ct.add('a');
     try ct.add('b');
     try ct.add('c');
 
-    const head = try createTree(arena.allocator(), ct);
+    const head = (try createTree(arena.allocator(), ct)).?;
     print("head count: {}\n", .{head.count});
-
-    // stdout is for the actual output of your application, for example if you
-    // are implementing gzip, then only the compressed bytes should be sent to
-    // stdout, not any debugging messages.
-    // const stdout_file = std.io.getStdOut().writer();
-    // var bw = std.io.bufferedWriter(stdout_file);
-    // const stdout = bw.writer();
-
-    // try bw.flush(); // don't forget to flush!
 }
+
+// const Tree = struct {
+//     head: *Node,
+//     size: u32,
+
+//     // fn encode(self: Tree) void {
+
+//     // }
+// };
 
 const Node = struct {
     left: ?*Node,
@@ -52,11 +40,21 @@ const Node = struct {
     count: u32,
 };
 
+fn traverse(head: *Node) void {
+    if (head.left) |left| {
+        traverse(node.left);
+    }
+    print("current char: {u}\tcurrent count: {d}\n", .{ head.char, head.count });
+    if (head.right) |right| {
+        traverse(node.right);
+    }
+}
+
 const TreeError = error{
     EmptyTable,
 };
 
-fn createTree(allocator: std.mem.Allocator, ct: char_table) !*Node {
+fn createTree(allocator: std.mem.Allocator, ct: char_table) !?*Node {
     if (ct.distinct_char_count == 0) { // no chars in char table
         return TreeError.EmptyTable;
     }
@@ -72,8 +70,8 @@ fn createTree(allocator: std.mem.Allocator, ct: char_table) !*Node {
     var target_cap = ct.distinct_char_count;
     var heap: MinHeap = try MinHeap.init(allocator, target_cap);
     // defer heap.deinit();
-    print("heap array len: {}\n", .{heap.array.items.len});
-    print("heap cap: {}\n", .{heap.array.capacity});
+    // print("heap array len: {}\n", .{heap.array.items.len});
+    // print("heap cap: {}\n", .{heap.array.capacity});
 
     var heap_ptr = &heap;
     for (ct.table) |e| {
@@ -84,8 +82,8 @@ fn createTree(allocator: std.mem.Allocator, ct: char_table) !*Node {
                 .char = e.char,
                 .count = e.count,
             };
-            print("cap: {}\n", .{heap.array.capacity});
-            print("heap: {}\n", .{heap});
+            // print("cap: {}\n", .{heap.array.capacity});
+            // print("heap: {}\n", .{heap});
             heap_ptr.insert(&new_node);
         }
     }
@@ -104,7 +102,7 @@ fn createTree(allocator: std.mem.Allocator, ct: char_table) !*Node {
         head = new_node;
         heap_ptr.insert(new_node);
     }
-
+    // const ret = Tree{ .head = head, .size = ct.cap };
     return head;
 }
 
@@ -128,9 +126,11 @@ test "create tree" {
     try ct.add('c');
 
     const head = try createTree(arena.allocator(), ct);
+    traverse(head);
     // defer freeTree(std.testing.allocator, head);
 
-    print("head count: {}\n", .{head.count});
+    const node = head.?;
+    print("head count: {}\n", .{node.count});
 }
 
 // ----------------------------------------
@@ -354,17 +354,17 @@ const MinHeap = struct {
 
     pub fn init(allocator: std.mem.Allocator, initial_cap: u32) !MinHeap {
         var array = try std.ArrayList(*Node).initCapacity(allocator, initial_cap);
-        print("init array len: {}\n", .{array.items.len});
-        print("init array cap: {}\n", .{array.capacity});
-        print("array items: {any}\n", .{array.items});
+        // print("init array len: {}\n", .{array.items.len});
+        // print("init array cap: {}\n", .{array.capacity});
+        // print("array items: {any}\n", .{array.items});
         var ret = MinHeap{ .array = array, .allocator = allocator };
         // print("heap array: {}\n", .{ret});
         return ret;
     }
 
     pub fn insert(self: *MinHeap, n: *Node) void {
-        print("heap array len (insert before append): {}\n", .{self.array.items.len});
-        print("heap array cap (insert before append): {}\n", .{self.array.capacity});
+        // print("heap array len (insert before append): {}\n", .{self.array.items.len});
+        // print("heap array cap (insert before append): {}\n", .{self.array.capacity});
         // print("heap inside insert: {}\n", .{self});
         self.array.appendAssumeCapacity(n);
 
@@ -450,13 +450,13 @@ test "min heap" {
     heap_ptr.insert(test_node_4_ptr);
     try std.testing.expectEqual(@as(u32, 5), heap.array.items[0].count);
     // try std.testing.expectEqual(@as(u32, 10), heap.array.items[0].count);
-    print("heap: {any}\n", .{heap.array.items});
+    // print("heap: {any}\n", .{heap.array.items});
 
     var min = try heap.extract();
-    print("min: {any}\n", .{min});
+    // print("min: {any}\n", .{min});
     try std.testing.expectEqual(@as(u32, 5), min.count);
     try std.testing.expectEqual(@as(u32, 7), heap.array.items[0].count);
-    print("heap: {any}\n", .{heap.array.items});
+    // print("heap: {any}\n", .{heap.array.items});
 }
 
 // helper functions for heap
@@ -472,3 +472,14 @@ fn left(idx: u64) u64 {
 fn right(idx: u64) u64 {
     return 2 * idx + 2;
 }
+
+const sample_string =
+    \\ We'll assume that each character has an associated weight equal to the number of times the character occurs in a file, for example. In the "go go gophers" example, the characters 'g' and 'o' have weight 3, the space has weight 2, and the other characters have weight 1. When compressing a file we'll need to calculate these weights, we'll ignore this step for now and assume that all character weights have been calculated. Huffman's algorithm assumes that we're building a single tree from a group (or forest) of trees. Initially, all the trees have a single node with a character and the character's weight. Trees are combined by picking two trees, and making a new tree from the two trees. This decreases the number of trees by one at each step since two trees are combined into one tree. The algorithm is as follows:
+    \\ 
+    \\ Begin with a forest of trees. All trees are one node, with the weight of the tree equal to the weight of the character in the node. Characters that occur most frequently have the highest weights. Characters that occur least frequently have the smallest weights.
+    \\ Repeat this step until there is only one tree:
+    \\ 
+    \\ Choose two trees with the smallest weights, call these trees T1 and T2. Create a new tree whose root has a weight equal to the sum of the weights T1 + T2 and whose left subtree is T1 and whose right subtree is T2.
+    \\ The single tree left after the previous step is an optimal encoding tree.
+    \\ We'll use the string "go go gophers" as an example. Initially we have the forest shown below. The nodes are shown with a weight/count that represents the number of times the node's character occurs.
+;
