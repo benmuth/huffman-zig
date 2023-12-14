@@ -1,7 +1,12 @@
 const std = @import("std");
 const print = std.debug.print;
 
+const heap = @import("heap.zig");
+const MinHeap = heap.MinHeap;
+
 const CharTableError = error{OutOfSpace};
+
+const sample = @embedFile("sample.txt");
 
 pub fn main() !void {
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
@@ -24,15 +29,6 @@ pub fn main() !void {
     print("head count: {}\n", .{head.count});
 }
 
-// const Tree = struct {
-//     head: *Node,
-//     size: u32,
-
-//     // fn encode(self: Tree) void {
-
-//     // }
-// };
-
 const Node = struct {
     left: ?*Node,
     right: ?*Node,
@@ -40,15 +36,15 @@ const Node = struct {
     count: u32,
 };
 
-fn traverse(head: *Node) void {
-    if (head.left) |left| {
-        traverse(node.left);
-    }
-    print("current char: {u}\tcurrent count: {d}\n", .{ head.char, head.count });
-    if (head.right) |right| {
-        traverse(node.right);
-    }
-}
+// fn traverse(head: *Node) void {
+//     if (head.left) |left| {
+//         traverse(node.left);
+//     }
+//     print("current char: {u}\tcurrent count: {d}\n", .{ head.char, head.count });
+//     if (head.right) |right| {
+//         traverse(node.right);
+//     }
+// }
 
 const TreeError = error{
     EmptyTable,
@@ -67,13 +63,15 @@ fn createTree(allocator: std.mem.Allocator, ct: char_table) !?*Node {
     // TODO: allocate all nodes at once and create tree in one pass
     // var tree_buf = allocator.alloc(*node, (2 * ct.distinct_char_count - 1)); // can be usize instead of *node?
 
+    const CharHeap = MinHeap(Node);
+
     var target_cap = ct.distinct_char_count;
-    var heap: MinHeap = try MinHeap.init(allocator, target_cap);
+    var char_heap: CharHeap = try CharHeap.init(allocator, target_cap);
     // defer heap.deinit();
     // print("heap array len: {}\n", .{heap.array.items.len});
     // print("heap cap: {}\n", .{heap.array.capacity});
 
-    var heap_ptr = &heap;
+    var heap_ptr = &char_heap;
     for (ct.table) |e| {
         if (e.isInitialized()) {
             var new_node = Node{
@@ -90,7 +88,7 @@ fn createTree(allocator: std.mem.Allocator, ct: char_table) !?*Node {
 
     var head = try allocator.create(Node);
     // print("heap array: {}\n", .{heap.array});
-    while (heap.array.items.len > 1) {
+    while (char_heap.array.items.len > 1) {
         const left_child = heap_ptr.extract() catch unreachable;
         const right_child = heap_ptr.extract() catch unreachable;
 
@@ -126,7 +124,7 @@ test "create tree" {
     try ct.add('c');
 
     const head = try createTree(arena.allocator(), ct);
-    traverse(head);
+    // traverse(head);
     // defer freeTree(std.testing.allocator, head);
 
     const node = head.?;
@@ -203,7 +201,7 @@ test "basic hash table ops" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     var ct = try char_table.init(arena.allocator(), prospectorHash, 4096);
-    var utf8_iterator = (try std.unicode.Utf8View.init(sample_string)).iterator();
+    var utf8_iterator = (try std.unicode.Utf8View.init(sample)).iterator();
     while (utf8_iterator.nextCodepoint()) |code_point| {
         try ct.add(code_point);
     }
@@ -216,7 +214,7 @@ test "basic hash table ops" {
             // print("char: {s} \t count: {d}\n", .{ s, e.count });
         }
     }
-    const expected_count = try std.unicode.utf8CountCodepoints(sample_string);
+    const expected_count = try std.unicode.utf8CountCodepoints(sample);
     try std.testing.expectEqual(expected_count, total_codepoint_count);
     print("expected: {d}, actual: {d}\n", .{ expected_count, total_codepoint_count });
 }
@@ -241,245 +239,3 @@ fn prospectorHash(c: u21) u32 {
     x ^= x >> 16;
     return x;
 }
-
-// ----------------------------------------
-// Sorting
-// ----------------------------------------
-
-fn quickSort(char_counts: []char_table_entry) void {
-    if (char_counts.len < 2) {
-        return; // already sorted
-    }
-
-    const pivot_idx = partition(char_counts);
-
-    // const pivot_idx = char_counts[char_counts.len - 1];
-    quickSort(char_counts[0..pivot_idx]);
-    quickSort(char_counts[pivot_idx + 1 .. char_counts.len]);
-}
-
-fn partition(a: []char_table_entry) u32 {
-    // invariants to maintain through iteration:
-    // group 'P': just the pivot element, element at [r == a.len-1]
-    // group 'L': elements known to be less than pivot, elements from [0,q)
-    // group 'G': elements known to be greater than pivot, elements from [q, j)
-    // group 'U': unseen elements, elements from [j, r)
-
-    // as iteration progresses group 'G' and 'L' grow, group 'U' shrinks
-
-    // j is our iteration variable
-    var j: u32 = 0;
-    // the pivot element will eventually be moved to index q
-    // during iteration, q points to the leftmost element in group 'G'
-    var q: u32 = 0;
-    // r points to the pivot, it stays in place during iteration (group 'P')
-    var r = a.len - 1;
-
-    // print("pivot index at: {d}\n", .{r});
-    // print("pivot element : {}\n", .{a[r]});
-    while (j < r) {
-        if (a[j].count > a[r].count) {
-            // the element is in the right spot (to the right of the eventual
-            // pivot, in group 'G'), so look at the next element
-            j += 1;
-            continue;
-        }
-        // a[j] <= pivot element, so it should be in group 'L', to the left of
-        // q (q is where the pivot element will eventually be)
-        // swap a[j] with q (the divider between 'L' and 'G' and
-        // increment q so that once again all elements to the left of q
-        // are less than the pivot
-        const tmp = a[j];
-        a[j] = a[q];
-        a[q] = tmp;
-        q += 1;
-        j += 1;
-    }
-    // after iteration, everything is in place besides p and r, so swap them
-    const tmp = a[r];
-    a[r] = a[q];
-    a[q] = tmp;
-    return q;
-}
-
-test "quicksort" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    var allocator = arena.allocator();
-
-    const rand_seed: u64 = @as(u64, @intCast(std.time.timestamp()));
-    var prng = std.rand.DefaultPrng.init(rand_seed);
-    const random = prng.random();
-    const test_table_size = random.uintLessThan(u8, 20);
-    var entries = try allocator.alloc(char_table_entry, test_table_size);
-    // defer allocator.free(entries);
-
-    for (entries) |*e| {
-        e.count = @as(u32, random.uintLessThan(u10, 1000));
-        e.char = random.uintLessThan(u21, 4096);
-    }
-
-    // entries[0] = char_table_entry{ .char = 'n', .count = 3 };
-    // entries[1] = char_table_entry{ .char = 'e', .count = 2 };
-    // entries[2] = char_table_entry{ .char = 'b', .count = 1 };
-
-    quickSort(entries);
-
-    var prev_count: u32 = 0;
-    for (entries) |e| {
-        var s: [4]u8 = undefined;
-        _ = try std.unicode.utf8Encode(e.char, &s);
-        try std.testing.expect(e.count >= prev_count);
-        prev_count = e.count;
-        // print("char: {s} \t count: {d}\n", .{ s, e.count });
-        // print("char: {s} \t count: {d}\t", .{ s, e.count });
-    }
-    print("\n", .{});
-}
-
-// ----------------------------------------
-// Priority Queue
-// ----------------------------------------
-
-const HeapError = error{
-    EmptyHeap,
-};
-
-/// MinHeap
-const MinHeap = struct {
-    // TODO: make this generic (for all types with a `count` field)
-    // array: std.ArrayList(char_table_entry),
-    array: std.ArrayList(*Node),
-    allocator: std.mem.Allocator,
-
-    pub fn init(allocator: std.mem.Allocator, initial_cap: u32) !MinHeap {
-        var array = try std.ArrayList(*Node).initCapacity(allocator, initial_cap);
-        // print("init array len: {}\n", .{array.items.len});
-        // print("init array cap: {}\n", .{array.capacity});
-        // print("array items: {any}\n", .{array.items});
-        var ret = MinHeap{ .array = array, .allocator = allocator };
-        // print("heap array: {}\n", .{ret});
-        return ret;
-    }
-
-    pub fn insert(self: *MinHeap, n: *Node) void {
-        // print("heap array len (insert before append): {}\n", .{self.array.items.len});
-        // print("heap array cap (insert before append): {}\n", .{self.array.capacity});
-        // print("heap inside insert: {}\n", .{self});
-        self.array.appendAssumeCapacity(n);
-
-        // print("heap array len (insert after append): {}\n", .{self.array.items.len});
-        self.minHeapifyUp(self.array.items.len - 1);
-    }
-
-    fn minHeapifyUp(self: *MinHeap, idx: u64) void {
-        var curr_idx = idx;
-        print("current idx: {} \t parent idx: {} \t array items length: {}\n", .{ curr_idx, parent(curr_idx), self.array.items.len });
-        while (self.array.items[parent(curr_idx)].count > self.array.items[curr_idx].count) {
-            self.swap(parent(curr_idx), curr_idx);
-            curr_idx = parent(curr_idx);
-        }
-    }
-
-    fn minHeapifyDown(self: *MinHeap, idx: u64) void {
-        const last = self.array.items.len - 1;
-        var l = left(idx);
-        var r = right(idx);
-        var childToCompare: u64 = 0;
-
-        while (l < last) {
-            if (l == last or self.array.items[l].count < self.array.items[r].count) {
-                childToCompare = l;
-            } else {
-                childToCompare = r;
-            }
-
-            var i = idx;
-            if (self.array.items[i].count > self.array.items[childToCompare].count) {
-                self.swap(i, childToCompare);
-                i = childToCompare;
-                l = left(i);
-                r = right(i);
-            } else {
-                return;
-            }
-        }
-    }
-
-    pub fn extract(self: *MinHeap) !*Node {
-        const last = self.array.getLastOrNull();
-        var res = self.array.items[0];
-        self.array.items[0] = last orelse return HeapError.EmptyHeap;
-
-        self.minHeapifyDown(0);
-
-        self.array.shrinkRetainingCapacity(self.array.items.len - 1);
-        return res;
-    }
-
-    fn deinit(self: MinHeap) void {
-        self.array.deinit();
-    }
-
-    fn swap(self: *MinHeap, idx1: u64, idx2: u64) void {
-        const tmp = self.array.items[idx1];
-        self.array.items[idx1] = self.array.items[idx2];
-        self.array.items[idx2] = tmp;
-    }
-};
-
-test "min heap" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    var allocator = arena.allocator();
-
-    var heap: MinHeap = try MinHeap.init(allocator, 4);
-    // defer heap.deinit();
-    var test_node_1 = Node{ .char = 'a', .count = 10, .left = null, .right = null };
-    var test_node_2 = Node{ .char = 'b', .count = 5, .left = null, .right = null };
-    var test_node_3 = Node{ .char = 'c', .count = 7, .left = null, .right = null };
-    var test_node_4 = Node{ .char = 'd', .count = 12, .left = null, .right = null };
-    var test_node_1_ptr = &test_node_1;
-    var test_node_2_ptr = &test_node_2;
-    var test_node_3_ptr = &test_node_3;
-    var test_node_4_ptr = &test_node_4;
-    var heap_ptr: *MinHeap = &heap;
-    heap_ptr.insert(test_node_1_ptr);
-    heap_ptr.insert(test_node_2_ptr);
-    heap_ptr.insert(test_node_3_ptr);
-    heap_ptr.insert(test_node_4_ptr);
-    try std.testing.expectEqual(@as(u32, 5), heap.array.items[0].count);
-    // try std.testing.expectEqual(@as(u32, 10), heap.array.items[0].count);
-    // print("heap: {any}\n", .{heap.array.items});
-
-    var min = try heap.extract();
-    // print("min: {any}\n", .{min});
-    try std.testing.expectEqual(@as(u32, 5), min.count);
-    try std.testing.expectEqual(@as(u32, 7), heap.array.items[0].count);
-    // print("heap: {any}\n", .{heap.array.items});
-}
-
-// helper functions for heap
-fn parent(idx: u64) u64 {
-    if (idx == 0) return idx;
-    return (idx - 1) / 2;
-}
-
-fn left(idx: u64) u64 {
-    return 2 * idx + 1;
-}
-
-fn right(idx: u64) u64 {
-    return 2 * idx + 2;
-}
-
-const sample_string =
-    \\ We'll assume that each character has an associated weight equal to the number of times the character occurs in a file, for example. In the "go go gophers" example, the characters 'g' and 'o' have weight 3, the space has weight 2, and the other characters have weight 1. When compressing a file we'll need to calculate these weights, we'll ignore this step for now and assume that all character weights have been calculated. Huffman's algorithm assumes that we're building a single tree from a group (or forest) of trees. Initially, all the trees have a single node with a character and the character's weight. Trees are combined by picking two trees, and making a new tree from the two trees. This decreases the number of trees by one at each step since two trees are combined into one tree. The algorithm is as follows:
-    \\ 
-    \\ Begin with a forest of trees. All trees are one node, with the weight of the tree equal to the weight of the character in the node. Characters that occur most frequently have the highest weights. Characters that occur least frequently have the smallest weights.
-    \\ Repeat this step until there is only one tree:
-    \\ 
-    \\ Choose two trees with the smallest weights, call these trees T1 and T2. Create a new tree whose root has a weight equal to the sum of the weights T1 + T2 and whose left subtree is T1 and whose right subtree is T2.
-    \\ The single tree left after the previous step is an optimal encoding tree.
-    \\ We'll use the string "go go gophers" as an example. Initially we have the forest shown below. The nodes are shown with a weight/count that represents the number of times the node's character occurs.
-;
