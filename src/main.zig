@@ -30,21 +30,21 @@ pub fn main() !void {
 }
 
 const Node = struct {
-    left: ?*Node,
-    right: ?*Node,
+    left: ?*Node = null,
+    right: ?*Node = null,
     char: u21, // char represents a Unicode codepoint
     count: u32,
-};
 
-// fn traverse(head: *Node) void {
-//     if (head.left) |left| {
-//         traverse(node.left);
-//     }
-//     print("current char: {u}\tcurrent count: {d}\n", .{ head.char, head.count });
-//     if (head.right) |right| {
-//         traverse(node.right);
-//     }
-// }
+    fn traverse(head: *Node) void {
+        if (head.left) |left| {
+            traverse(left);
+        }
+        print("current char: {u}\tcurrent count: {d}\n", .{ head.char, head.count });
+        if (head.right) |right| {
+            traverse(right);
+        }
+    }
+};
 
 const TreeError = error{
     EmptyTable,
@@ -58,10 +58,7 @@ fn createTree(allocator: std.mem.Allocator, ct: char_table) !?*Node {
         return allocator.create(Node); // TODO: make this return a useful pointer to a node
     }
 
-    // std.assert(std.sort.isSorted(char_table_entry, ct.table, {}, std.sort.asc(char_table_entry)));
-
     // TODO: allocate all nodes at once and create tree in one pass
-    // var tree_buf = allocator.alloc(*node, (2 * ct.distinct_char_count - 1)); // can be usize instead of *node?
 
     const CharHeap = MinHeap(Node);
 
@@ -74,21 +71,21 @@ fn createTree(allocator: std.mem.Allocator, ct: char_table) !?*Node {
     var heap_ptr = &char_heap;
     for (ct.table) |e| {
         if (e.isInitialized()) {
-            var new_node = Node{
-                .left = null,
-                .right = null,
-                .char = e.char,
-                .count = e.count,
-            };
-            // print("cap: {}\n", .{heap.array.capacity});
-            // print("heap: {}\n", .{heap});
-            heap_ptr.insert(&new_node);
+            // print("element: {}:{d}\n\n", .{ e.char, e.count });
+            var new_node = try allocator.create(Node);
+            new_node.char = e.char;
+            new_node.count = e.count;
+            new_node.left = null;
+            new_node.right = null;
+            heap_ptr.insert(new_node);
+            // print("heap array: {any}\n\n", .{heap_ptr.array.items});
         }
     }
 
     var head = try allocator.create(Node);
-    // print("heap array: {}\n", .{heap.array});
+    // print("heap array: {any}\n", .{heap_ptr.array.items});
     while (char_heap.array.items.len > 1) {
+        // print("heap before: {any}\n\n", .{heap_ptr.array.items});
         const left_child = heap_ptr.extract() catch unreachable;
         const right_child = heap_ptr.extract() catch unreachable;
 
@@ -98,6 +95,7 @@ fn createTree(allocator: std.mem.Allocator, ct: char_table) !?*Node {
 
         new_node.* = Node{ .left = left_child, .right = right_child, .char = 0x00, .count = sum_counts };
         head = new_node;
+        // print("new node: {any}\n\n", .{new_node});
         heap_ptr.insert(new_node);
     }
     // const ret = Tree{ .head = head, .size = ct.cap };
@@ -120,11 +118,18 @@ test "create tree" {
     // defer ct.deinit(std.testing.allocator);
 
     try ct.add('a');
+    // try ct.add('a');
     try ct.add('b');
     try ct.add('c');
 
+    // for (ct.table) |item| {
+    //     if (item.isInitialized()) {
+    //         print("ct item: {any}\n", .{item});
+    //     }
+    // }
+
     const head = try createTree(arena.allocator(), ct);
-    // traverse(head);
+    head.?.traverse();
     // defer freeTree(std.testing.allocator, head);
 
     const node = head.?;

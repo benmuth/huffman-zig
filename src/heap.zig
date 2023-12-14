@@ -35,7 +35,7 @@ pub fn MinHeap(comptime T: type) type {
 
         fn minHeapifyUp(self: *Self, idx: u64) void {
             var curr_idx = idx;
-            print("current idx: {} \t parent idx: {} \t array items length: {}\n", .{ curr_idx, parent(curr_idx), self.array.items.len });
+            // print("current idx: {} \t parent idx: {} \t array items length: {}\n", .{ curr_idx, parent(curr_idx), self.array.items.len });
             while (self.array.items[parent(curr_idx)].count > self.array.items[curr_idx].count) {
                 self.swap(parent(curr_idx), curr_idx);
                 curr_idx = parent(curr_idx);
@@ -116,17 +116,36 @@ test "min heap" {
     var test_node_4_ptr = &test_node_4;
     var heap_ptr: *CharHeap = &heap;
     heap_ptr.insert(test_node_1_ptr);
+    print("heap array: {any}\n\n", .{heap_ptr.array.items});
     heap_ptr.insert(test_node_2_ptr);
+    print("heap array: {any}\n\n", .{heap_ptr.array.items});
     heap_ptr.insert(test_node_3_ptr);
+    print("heap array: {any}\n\n", .{heap_ptr.array.items});
     heap_ptr.insert(test_node_4_ptr);
+    print("heap array: {any}\n\n", .{heap_ptr.array.items});
     try std.testing.expectEqual(@as(u32, 5), heap.array.items[0].count);
     // try std.testing.expectEqual(@as(u32, 10), heap.array.items[0].count);
     // print("heap: {any}\n", .{heap.array.items});
 
     var min = try heap.extract();
-    // print("min: {any}\n", .{min});
     try std.testing.expectEqual(@as(u32, 5), min.count);
-    try std.testing.expectEqual(@as(u32, 7), heap.array.items[0].count);
+    try std.testing.expectEqual(@as(u21, 'b'), min.char);
+    // try std.testing.expectEqual(@as(u32, 7), heap.array.items[0].count);
+
+    var next = try heap.extract();
+    try std.testing.expectEqual(@as(u32, 7), next.count);
+    try std.testing.expectEqual(@as(u21, 'c'), next.char);
+
+    var pen = try heap.extract();
+    try std.testing.expectEqual(@as(u32, 10), pen.count);
+    try std.testing.expectEqual(@as(u21, 'a'), pen.char);
+
+    var last = try heap.extract();
+    try std.testing.expectEqual(@as(u32, 12), last.count);
+    try std.testing.expectEqual(@as(u21, 'd'), last.char);
+    // var next = try heap.extract();
+    // try std.testing.expectEqual(@as(u32, 7), next.count);
+
     // print("heap: {any}\n", .{heap.array.items});
 }
 
